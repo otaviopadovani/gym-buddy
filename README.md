@@ -12,7 +12,7 @@ A personal, dumbbell-focused **fitness & food tracker** built as an offline-capa
 - **Reminders** — on-device notifications for weigh-ins, workouts, meals and a protein check-in.
 - **More** — edit your profile/goal, manage the training block, and **export/import** your data (JSON) to back it up or move devices.
 
-The defaults are pre-filled for the owner (42 y, 170 cm, 70.4 kg start, returning to training, runs 10k, **goal: look lean & toned**) — everything is editable under **More → Profile**.
+The defaults are pre-filled for the owner (42 y, 170 cm, 70 kg start, returning to training, runs 10k, **goal: look lean & toned**) — everything is editable under **More → Profile**.
 
 ## Training methodology & the science
 

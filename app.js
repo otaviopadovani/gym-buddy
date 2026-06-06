@@ -9,12 +9,12 @@ const DEFAULT_STATE = {
   profile: {
     name: "Me",
     age: 42,
-    heightCm: 169,
+    heightCm: 170,
     sex: "male",
     activity: 1.45,   // light–moderate (some lifting + running)
     goal: "recomp",   // cut | recomp | maintain | gain
     proteinPerKg: 2.0, // upper end of evidence-based range (1.6–2.2) — justified in a deficit
-    startWeight: 72.5,
+    startWeight: 70,
   },
   programStart: todayKey(), // when the current 5-week training block began
   weights: [],         // { date:'YYYY-MM-DD', kg:Number }
