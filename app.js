@@ -13,9 +13,10 @@ const DEFAULT_STATE = {
     sex: "male",
     activity: 1.45,   // light–moderate (some lifting + running)
     goal: "recomp",   // cut | recomp | maintain | gain
-    proteinPerKg: 1.8,
+    proteinPerKg: 2.0, // upper end of evidence-based range (1.6–2.2) — justified in a deficit
     startWeight: 72.5,
   },
+  programStart: todayKey(), // when the current 5-week training block began
   weights: [],         // { date:'YYYY-MM-DD', kg:Number }
   weights_init: false,
   workoutWeights: {},  // exerciseId -> current kg
@@ -97,6 +98,23 @@ function calcTargets() {
   return { bmr: Math.round(bmr), tdee: Math.round(tdee), kcal, protein, fat, carbs, weight: w };
 }
 
+/* ---------- block periodization (weekly set ramp + RIR + deload) ---------- */
+function blockWeekIndex(date = new Date()) {
+  const start = new Date((state.programStart || todayKey()) + "T00:00");
+  const days = Math.floor((date - start) / 86400000);
+  const len = PROGRAM.block.lengthWeeks;
+  const wk = Math.floor(days / 7);
+  return ((wk % len) + len) % len;
+}
+function currentWeek(date = new Date()) {
+  return PROGRAM.block.weeks[blockWeekIndex(date)];
+}
+// target number of sets for an exercise this week (ramps up, then deloads), clamped
+function currentSets(ex, date = new Date()) {
+  const w = currentWeek(date);
+  return Math.max(2, Math.min(ex.sets + 2, ex.sets + w.setBonus));
+}
+
 /* ---------- workout helpers ---------- */
 function weightFor(exId) {
   if (state.workoutWeights[exId] != null) return state.workoutWeights[exId];
@@ -127,8 +145,10 @@ function strengthStreak() {
   return count;
 }
 // progressive overload: did every set hit the top of the rep range last time?
+// Looks at the most recent PRIOR session (never today's in-progress log).
 function lastPerformance(exId) {
-  const keys = Object.keys(state.workoutLog).sort().reverse();
+  const today = todayKey();
+  const keys = Object.keys(state.workoutLog).filter((k) => k !== today).sort().reverse();
   for (const k of keys) {
     const log = state.workoutLog[k];
     if (log.sets && log.sets[exId]) return { date: k, sets: log.sets[exId] };
@@ -139,8 +159,9 @@ function shouldProgress(ex) {
   const perf = lastPerformance(ex.id);
   if (!perf) return false;
   const arr = perf.sets;
-  if (arr.length < ex.sets) return false;
-  return arr.slice(0, ex.sets).every((reps) => Number(reps) >= ex.repHigh);
+  const sets = currentSets(ex);
+  if (arr.length < sets) return false;
+  return arr.slice(0, sets).every((reps) => Number(reps) >= ex.repHigh);
 }
 
 /* ---------- UI plumbing ---------- */
@@ -168,7 +189,9 @@ function toast(msg) {
 function setActiveTab() {
   document.querySelectorAll(".tab").forEach((b) => {
     const r = b.dataset.route;
-    const on = r === route || (r === "settings" && (route === "reminders" || route === "profile"));
+    const on = r === route
+      || (r === "workouts" && route === "history")
+      || (r === "settings" && (route === "reminders" || route === "profile"));
     b.classList.toggle("active", on);
   });
 }
@@ -187,6 +210,7 @@ function updateStreakPill() {
 function render() {
   switch (route) {
     case "workouts": view.innerHTML = viewWorkouts(); break;
+    case "history":  view.innerHTML = viewHistory(); break;
     case "weight":   view.innerHTML = viewWeight(); bindWeight(); break;
     case "food":     view.innerHTML = viewFood(); bindFood(); break;
     case "settings": view.innerHTML = viewSettings(); bindSettings(); break;
@@ -228,7 +252,8 @@ function viewToday() {
   } else {
     const log = getLog(key);
     const doneCount = log ? Object.values(log.sets).filter((a) => a && a.length).length : 0;
-    html += `<p class="subtle" style="margin:0 0 12px">${session.exercises.length} exercises · ${doneCount} started</p>
+    const wk = currentWeek();
+    html += `<p class="subtle" style="margin:0 0 12px">${session.exercises.length} exercises · ${doneCount} started · <b>week ${blockWeekIndex() + 1}/${PROGRAM.block.lengthWeeks} (${wk.label}, ${wk.rir} RIR)</b></p>
       <button class="btn" onclick="navigate('workouts')">${log && log.done ? "Review session ✓" : "Start workout"}</button>`;
   }
   html += `</div>`;
@@ -246,15 +271,20 @@ function viewToday() {
   </div>`;
 
   // Weight card
+  const loggedToday = (state.weights.find((e) => e.date === key) || {}).kg;
   html += `<div class="card">
-    <div class="card-head"><h2>⚖️ Weight</h2></div>
+    <div class="card-head"><h2>⚖️ Weight</h2>${loggedToday != null ? `<span class="pill">logged today ✓</span>` : ""}</div>
     <div class="stat-grid">
       <div class="stat"><div class="label">Current</div><div class="value">${latestWeight()}<small> kg</small></div>
         <div class="sub">${lastW ? "logged " + relativeDays(lastW.date) : "from profile"}</div></div>
       <div class="stat"><div class="label">Since start</div><div class="value">${signed(latestWeight() - state.profile.startWeight)}<small> kg</small></div>
         <div class="sub">start ${state.profile.startWeight} kg</div></div>
     </div>
-    <button class="btn secondary" style="margin-top:14px" onclick="navigate('weight')">Log today's weight</button>
+    <div class="search-row" style="margin-top:14px">
+      <input id="today-w-input" type="number" inputmode="decimal" step="0.1" placeholder="${loggedToday != null ? loggedToday : "today's kg"}" />
+      <button class="btn small" id="today-w-save">Save</button>
+    </div>
+    <button class="btn secondary" style="margin-top:10px" onclick="navigate('weight')">Trend & history</button>
   </div>`;
 
   // Reminder nudge
@@ -264,7 +294,24 @@ function viewToday() {
 
   return html;
 }
-function bindToday() {}
+function bindToday() {
+  const btn = document.getElementById("today-w-save");
+  if (btn) btn.onclick = () => saveWeight(document.getElementById("today-w-input").value);
+}
+
+// shared weight logger (used by Today and Weight tabs)
+function saveWeight(raw) {
+  const val = parseFloat(raw);
+  if (isNaN(val) || val < 30 || val > 250) { toast("Enter a valid weight"); return false; }
+  const key = todayKey();
+  const idx = state.weights.findIndex((e) => e.date === key);
+  if (idx >= 0) state.weights[idx].kg = val;
+  else state.weights.push({ date: key, kg: val });
+  save();
+  toast("Weight saved: " + val + " kg");
+  render();
+  return true;
+}
 
 function relativeDays(dateStr) {
   const diff = Math.round((Date.now() - new Date(dateStr + "T00:00").getTime()) / 86400000);
@@ -281,7 +328,8 @@ function viewWorkouts() {
   const session = PROGRAM.sessions[sid];
   const key = todayKey();
 
-  let html = `<h1>${session.name}</h1><p class="subtle">${prettyDate(now)} · ${session.focus || ""}</p>`;
+  let html = `<div class="card-head"><h1>${session.name}</h1><button class="btn small secondary" onclick="navigate('history')">History</button></div>
+    <p class="subtle">${prettyDate(now)} · ${session.focus || ""}</p>`;
 
   if (session.rest) {
     html += `<div class="card"><p style="margin:0">${session.note}</p></div>`;
@@ -297,14 +345,20 @@ function viewWorkouts() {
   }
 
   const log = ensureLog(key, sid);
+  const wk = currentWeek();
+  const wkNum = blockWeekIndex() + 1;
 
-  html += `<div class="banner info">💡 <div>Tap a set circle each time you finish it — enter the reps you actually did. When you hit the top of the rep range on <b>all</b> sets, I'll suggest adding weight next time.</div></div>`;
+  html += `<div class="banner ${wk.deload ? "warn" : "up"}">${wk.deload ? "🌙" : "📈"}
+    <div><b>Block week ${wkNum}/${PROGRAM.block.lengthWeeks} · ${wk.label}</b> — target <b>${wk.rir} reps in reserve</b>.<br>${wk.note}</div></div>`;
+
+  html += `<div class="banner info">💡 <div>Use <b>+</b> / <b>−</b> to log the reps you did on each set (tap the number to mark a set done at the low end). Stop each set at the week's target reps-in-reserve. Hit the top of the rep range on <b>all</b> sets and I'll suggest adding weight next time.</div></div>`;
 
   session.exercises.forEach((ex) => {
     const w = weightFor(ex.id);
     const unit = ex.unit === "sec" ? "" : "kg";
     const setArr = log.sets[ex.id] || [];
     const progress = shouldProgress(ex);
+    const sets = currentSets(ex);
     const repTarget = ex.unit === "sec" ? `${ex.repLow}–${ex.repHigh}s` :
                       ex.unit === "reps" ? `${ex.repLow}–${ex.repHigh} reps` :
                       `${ex.repLow}–${ex.repHigh} reps`;
@@ -312,8 +366,8 @@ function viewWorkouts() {
     html += `<div class="exercise" id="ex-${ex.id}">
       <div class="exercise-top">
         <div>
-          <div class="exercise-name">${ex.name}</div>
-          <div class="exercise-meta">${ex.sets} × ${repTarget}</div>
+          <div class="exercise-name">${ex.name}${ex.stretch ? ` <span class="tag stretch" title="Train the full stretched range — it grows more muscle">stretch</span>` : ""}</div>
+          <div class="exercise-meta">${sets} × ${repTarget} · ${wk.rir} RIR</div>
         </div>`;
 
     if (ex.unit === "sec" || ex.unit === "reps") {
@@ -328,14 +382,21 @@ function viewWorkouts() {
     }
     html += `</div>`;
 
-    // set pills
+    // set steppers
+    const step = ex.unit === "sec" || ex.unit === "reps" ? 5 : 1;
+    const labelUnit = ex.unit === "sec" ? "s" : "";
     html += `<div class="set-pills">`;
-    for (let i = 0; i < ex.sets; i++) {
+    for (let i = 0; i < sets; i++) {
       const val = setArr[i];
       const hit = val != null && val !== "";
-      const labelUnit = ex.unit === "sec" ? "s" : "";
-      html += `<button class="set-pill ${hit ? "hit" : ""}" onclick="logSet('${ex.id}', ${i}, ${ex.repHigh}, '${ex.unit || "reps"}')">
-        Set ${i + 1}${hit ? ": " + val + labelUnit : ""}</button>`;
+      html += `<div class="set-stepper ${hit ? "logged" : ""}">
+        <button class="step-btn" onclick="adjustSet('${ex.id}',${i},-1,${ex.repLow},${ex.repHigh},${step})" aria-label="less">−</button>
+        <button class="step-val" onclick="toggleSet('${ex.id}',${i},${ex.repLow})">
+          <span class="step-num">${hit ? val + labelUnit : "–"}</span>
+          <span class="step-lbl">Set ${i + 1}</span>
+        </button>
+        <button class="step-btn" onclick="adjustSet('${ex.id}',${i},1,${ex.repLow},${ex.repHigh},${step})" aria-label="more">+</button>
+      </div>`;
     }
     html += `</div>`;
 
@@ -353,7 +414,8 @@ function viewWorkouts() {
 
 function weekOverview(now) {
   const days = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
-  let html = `<div class="section-title">This week</div><div class="card tight"><ul class="list">`;
+  let html = `<div class="section-title">This week</div>
+    <p class="subtle" style="margin:-4px 2px 10px">Tap a day to see what it involves.</p>`;
   const monday = new Date(now); monday.setDate(now.getDate() - ((now.getDay() + 6) % 7));
   for (let i = 0; i < 7; i++) {
     const d = new Date(monday); d.setDate(monday.getDate() + i);
@@ -361,11 +423,109 @@ function weekOverview(now) {
     const s = PROGRAM.sessions[sid];
     const log = getLog(todayKey(d));
     const isToday = todayKey(d) === todayKey(now);
-    const status = log && log.done ? "✅" : (sid === "rest" ? "😴" : sid === "run" ? "🏃" : "⬜");
-    html += `<li><span>${status} <b>${days[d.getDay()]}</b> <span class="meta">${d.getDate()}</span></span>
-      <span class="meta">${s.name}${isToday ? " · today" : ""}</span></li>`;
+    const status = log && log.done ? "✅" : (sid === "rest" ? "😴" : sid === "run" ? "🏃" : "🏋️");
+
+    let detail = "";
+    if (s.exercises) {
+      detail = `<ul class="list">` + s.exercises.map((ex) => {
+        const unit = ex.unit === "sec" ? "s" : "";
+        return `<li><span>${ex.name}${ex.stretch ? ` <span class="tag stretch">stretch</span>` : ""}</span><span class="meta">${currentSets(ex, d)} × ${ex.repLow}–${ex.repHigh}${unit}</span></li>`;
+      }).join("") + `</ul>`;
+    } else if (s.cardio) {
+      detail = `<p class="subtle" style="margin:0 0 8px">${s.note}</p><ul class="list">` +
+        s.options.map((o) => `<li><span>${o}</span></li>`).join("") + `</ul>`;
+    } else {
+      detail = `<p class="subtle" style="margin:0">${s.note}</p>`;
+    }
+
+    html += `<details class="day ${isToday ? "today" : ""}" ${isToday ? "open" : ""}>
+      <summary>
+        <span>${status} <b>${days[d.getDay()]}</b> <span class="meta">${d.getDate()}</span></span>
+        <span class="meta">${s.name}${s.focus ? " · " + s.focus : ""}${isToday ? " · today" : ""}</span>
+      </summary>
+      <div class="day-body">${detail}</div>
+    </details>`;
   }
-  html += `</ul></div>`;
+  return html;
+}
+
+/* ---------------------- HISTORY ---------------------- */
+// look up an exercise definition across all sessions
+function exDef(exId) {
+  for (const sid in PROGRAM.sessions) {
+    const s = PROGRAM.sessions[sid];
+    if (s.exercises) {
+      const found = s.exercises.find((e) => e.id === exId);
+      if (found) return found;
+    }
+  }
+  return null;
+}
+
+function viewHistory() {
+  const logs = Object.entries(state.workoutLog)
+    .filter(([, l]) => l.done || (l.sets && Object.keys(l.sets).length))
+    .sort((a, b) => b[0].localeCompare(a[0]));
+
+  // stats
+  const totalDone = Object.values(state.workoutLog).filter((l) => l.done).length;
+  const now = new Date();
+  const monday = new Date(now); monday.setDate(now.getDate() - ((now.getDay() + 6) % 7));
+  const mondayKey = todayKey(monday);
+  const thisWeek = logs.filter(([d, l]) => l.done && d >= mondayKey).length;
+
+  let html = `<div class="card-head"><h1>History</h1><button class="btn small secondary" onclick="navigate('workouts')">Back</button></div>
+    <p class="subtle">Everything you've logged, newest first.</p>
+    <div class="stat-grid">
+      <div class="stat"><div class="label">Workouts done</div><div class="value">${totalDone}</div></div>
+      <div class="stat"><div class="label">This week</div><div class="value">${thisWeek}</div></div>
+      <div class="stat"><div class="label">Strength streak</div><div class="value">${strengthStreak()}<small> 🔥</small></div></div>
+      <div class="stat"><div class="label">Days logged</div><div class="value">${logs.length}</div></div>
+    </div>`;
+
+  if (!logs.length) {
+    html += `<div class="empty" style="margin-top:18px">No workouts logged yet. Once you log sets on the Workouts tab, they'll show up here.</div>`;
+    return html;
+  }
+
+  html += `<div class="section-title">Sessions</div>`;
+  logs.forEach(([date, log]) => {
+    const session = PROGRAM.sessions[log.sessionId] || {};
+    const d = new Date(date + "T00:00");
+    const dayName = d.toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric" });
+    const isCardio = session.cardio;
+    const isToday = date === todayKey();
+
+    // build exercise rows + tonnage estimate (uses current weights)
+    let rows = "", tonnage = 0, totalSets = 0;
+    if (log.sets) {
+      for (const exId in log.sets) {
+        const arr = (log.sets[exId] || []).filter((v) => v != null && v !== "");
+        if (!arr.length) continue;
+        totalSets += arr.length;
+        const def = exDef(exId);
+        const name = def ? def.name : exId;
+        const unitLbl = def && def.unit === "sec" ? "s" : "";
+        const wt = state.workoutWeights[exId] ?? (PROGRAM.defaultWeights[exId] || 0);
+        if (wt && !(def && def.unit)) tonnage += wt * arr.reduce((s, r) => s + (+r || 0), 0);
+        const repsStr = arr.map((r) => r + unitLbl).join(", ");
+        rows += `<li><span>${name}</span><span class="meta">${repsStr}${wt && !(def && def.unit) ? ` @ ${wt}kg` : ""}</span></li>`;
+      }
+    }
+    const summary = isCardio
+      ? "Run / cardio"
+      : `${totalSets} sets${tonnage ? ` · ≈${Math.round(tonnage).toLocaleString()} kg volume` : ""}`;
+
+    html += `<details class="day" ${isToday ? "open" : ""}>
+      <summary>
+        <span>${log.done ? "✅" : "•"} <b>${dayName}</b></span>
+        <span class="meta">${session.name || "Workout"} · ${summary}</span>
+      </summary>
+      <div class="day-body">${rows ? `<ul class="list">${rows}</ul>` : `<p class="subtle" style="margin:0">${isCardio ? "Cardio session completed." : "Marked done (no sets recorded)."}</p>`}</div>
+    </details>`;
+  });
+
+  html += `<p class="subtle" style="text-align:center;margin-top:8px">Volume estimates use your current weights.</p>`;
   return html;
 }
 
@@ -381,16 +541,27 @@ window.setWeight = (id, val) => {
   const n = parseFloat(val);
   if (!isNaN(n)) { state.workoutWeights[id] = Math.max(0, n); save(); }
 };
-window.logSet = (exId, idx, target, unit) => {
+window.adjustSet = (exId, idx, delta, lo, hi, step) => {
   const key = todayKey();
-  const sid = resolveSession(new Date());
-  const log = ensureLog(key, sid);
+  const log = ensureLog(key, resolveSession(new Date()));
   if (!log.sets[exId]) log.sets[exId] = [];
-  const promptUnit = unit === "sec" ? "seconds held" : "reps done";
-  const current = log.sets[exId][idx];
-  const input = window.prompt(`${promptUnit}? (target ${target})`, current != null && current !== "" ? current : target);
-  if (input === null) return;
-  log.sets[exId][idx] = input === "" ? "" : Math.max(0, parseInt(input, 10) || 0);
+  let cur = log.sets[exId][idx];
+  if (cur == null || cur === "") {
+    if (delta < 0) return;      // nothing logged yet, − does nothing
+    cur = lo;                   // first + logs the low end of the range
+  } else {
+    cur = Math.max(0, cur + delta * step);
+  }
+  log.sets[exId][idx] = cur;
+  save();
+  render();
+};
+window.toggleSet = (exId, idx, lo) => {
+  const key = todayKey();
+  const log = ensureLog(key, resolveSession(new Date()));
+  if (!log.sets[exId]) log.sets[exId] = [];
+  const cur = log.sets[exId][idx];
+  log.sets[exId][idx] = cur == null || cur === "" ? lo : "";
   save();
   render();
 };
@@ -454,17 +625,7 @@ function viewWeight() {
   return html;
 }
 function bindWeight() {
-  document.getElementById("w-save").onclick = () => {
-    const val = parseFloat(document.getElementById("w-input").value);
-    if (isNaN(val) || val < 30 || val > 250) { toast("Enter a valid weight"); return; }
-    const key = todayKey();
-    const idx = state.weights.findIndex((e) => e.date === key);
-    if (idx >= 0) state.weights[idx].kg = val;
-    else state.weights.push({ date: key, kg: val });
-    save();
-    toast("Weight saved");
-    render();
-  };
+  document.getElementById("w-save").onclick = () => saveWeight(document.getElementById("w-input").value);
 }
 window.delWeight = (date) => {
   state.weights = state.weights.filter((e) => e.date !== date);
@@ -541,13 +702,31 @@ function viewFood() {
   </div>`;
 
   html += `<div class="card">
-    <div class="card-head"><h2>Add food</h2></div>
-    <label class="field"><span>What did you eat?</span><input id="f-name" placeholder="e.g. Chicken & rice" /></label>
-    <div class="row">
-      <label class="field"><span>Calories</span><input id="f-kcal" type="number" inputmode="numeric" placeholder="kcal" /></label>
-      <label class="field"><span>Protein (g)</span><input id="f-prot" type="number" inputmode="numeric" placeholder="g" /></label>
+    <div class="card-head"><h2>Search a food</h2><span class="pill">Open Food Facts</span></div>
+    <div class="search-row">
+      <input id="f-search" placeholder="e.g. greek yogurt, oats, banana" enterkeyhint="search" />
+      <button class="btn small" id="f-search-btn">Search</button>
     </div>
-    <button class="btn" id="f-add">Add</button>
+    <div id="f-results"></div>
+  </div>`;
+
+  html += `<div class="card">
+    <div class="card-head"><h2>Add food</h2></div>
+    <label class="field"><span>Describe your meal — I'll work out the calories</span>
+      <textarea id="f-meal" rows="2" placeholder="e.g. 2 eggs + 2 slices bacon + 100g oats + 1 banana"></textarea></label>
+    <button class="btn" id="f-calc">Calculate</button>
+    <div id="meal-preview"></div>
+    <details class="manual">
+      <summary>Or enter one item manually</summary>
+      <div style="padding-top:12px">
+        <label class="field"><span>Name</span><input id="f-name" placeholder="e.g. Chicken & rice" /></label>
+        <div class="row">
+          <label class="field"><span>Calories</span><input id="f-kcal" type="number" inputmode="numeric" placeholder="kcal" /></label>
+          <label class="field"><span>Protein (g)</span><input id="f-prot" type="number" inputmode="numeric" placeholder="g" /></label>
+        </div>
+        <button class="btn secondary" id="f-add">Add item</button>
+      </div>
+    </details>
     <div class="chips" id="presets">
       ${state.foodPresets.map((p, i) => `<button class="chip" data-preset="${i}">${p.name} · ${p.kcal}kcal</button>`).join("")}
     </div>
@@ -587,12 +766,293 @@ function bindFood() {
     toast("Added " + p.name);
     render();
   });
+
+  // ---- natural-language meal calculator ----
+  const mealInput = document.getElementById("f-meal");
+  const previewBox = document.getElementById("meal-preview");
+  document.getElementById("f-calc").onclick = () => calcMeal(mealInput.value, previewBox);
+
+  previewBox.addEventListener("input", (e) => {
+    const line = e.target.closest(".meal-line");
+    if (!line) return;
+    const i = +line.dataset.i;
+    if (e.target.classList.contains("ml-name")) mealPreview[i].label = e.target.value;
+    if (e.target.classList.contains("ml-kcal")) mealPreview[i].kcal = +e.target.value || 0;
+    if (e.target.classList.contains("ml-prot")) mealPreview[i].protein = +e.target.value || 0;
+    // refresh just the total
+    const totKcal = mealPreview.reduce((s, l) => s + (+l.kcal || 0), 0);
+    const totProt = mealPreview.reduce((s, l) => s + (+l.protein || 0), 0);
+    const tot = previewBox.querySelector(".meal-total .v");
+    if (tot) tot.textContent = `${totKcal} kcal · ${totProt} g protein`;
+  });
+  previewBox.addEventListener("click", (e) => {
+    if (e.target.closest(".ml-del")) {
+      const line = e.target.closest(".meal-line");
+      mealPreview.splice(+line.dataset.i, 1);
+      renderMealPreview(previewBox);
+      return;
+    }
+    if (e.target.id === "meal-add-all") {
+      if (!mealPreview.length) return;
+      const key = todayKey();
+      if (!state.food[key]) state.food[key] = [];
+      mealPreview.forEach((l) => state.food[key].push({ name: l.label || "Food", kcal: +l.kcal || 0, protein: +l.protein || 0 }));
+      save();
+      mealPreview = [];
+      toast("Meal logged");
+      render();
+    }
+  });
+
+  // ---- Open Food Facts search ----
+  const searchInput = document.getElementById("f-search");
+  const searchBtn = document.getElementById("f-search-btn");
+  const resultsBox = document.getElementById("f-results");
+  searchBtn.onclick = () => runFoodSearch(searchInput.value.trim(), resultsBox);
+  searchInput.onkeydown = (e) => { if (e.key === "Enter") runFoodSearch(searchInput.value.trim(), resultsBox); };
+
+  resultsBox.addEventListener("click", (e) => {
+    const btn = e.target.closest("[data-add]");
+    if (!btn) return;
+    const r = foodResults[+btn.dataset.add];
+    const gramsEl = btn.closest(".food-result").querySelector(".fr-grams");
+    const grams = Math.max(1, parseFloat(gramsEl.value) || 100);
+    const kcal = Math.round((r.kcal100 * grams) / 100);
+    const protein = Math.round((r.prot100 * grams) / 100);
+    const key = todayKey();
+    if (!state.food[key]) state.food[key] = [];
+    state.food[key].push({ name: `${r.name} (${grams} g)`, kcal, protein });
+    save();
+    toast(`Added ${kcal} kcal`);
+    render();
+  });
+}
+
+let foodResults = [];
+async function runFoodSearch(query, box) {
+  if (!query) { box.innerHTML = ""; return; }
+  box.innerHTML = `<div class="empty">Searching…</div>`;
+  const url = "https://world.openfoodfacts.org/cgi/search.pl?" + new URLSearchParams({
+    search_terms: query, search_simple: "1", action: "process", json: "1",
+    page_size: "20", fields: "product_name,brands,nutriments",
+  });
+  try {
+    const res = await fetch(url);
+    if (!res.ok) throw new Error("status " + res.status);
+    const data = await res.json();
+    foodResults = (data.products || [])
+      .map((p) => {
+        const n = p.nutriments || {};
+        let kcal = n["energy-kcal_100g"];
+        if (kcal == null && n["energy_100g"] != null) kcal = n["energy_100g"] / 4.184; // kJ → kcal
+        const prot = n["proteins_100g"];
+        const name = (p.product_name || "").trim();
+        if (!name || kcal == null || isNaN(kcal)) return null;
+        return {
+          name: p.brands ? `${name} — ${p.brands.split(",")[0].trim()}` : name,
+          kcal100: Math.round(kcal),
+          prot100: Math.round((prot || 0) * 10) / 10,
+        };
+      })
+      .filter(Boolean)
+      .slice(0, 12);
+
+    if (!foodResults.length) { box.innerHTML = `<div class="empty">No matches with calorie data. Try a simpler term, or enter it manually below.</div>`; return; }
+
+    box.innerHTML = foodResults.map((r, i) => `
+      <div class="food-result">
+        <div class="fr-main"><b>${escapeHtml(r.name)}</b>
+          <div class="meta">${r.kcal100} kcal · ${r.prot100} g protein <span style="opacity:.7">/ 100 g</span></div>
+        </div>
+        <div class="fr-add">
+          <input class="fr-grams" type="number" inputmode="numeric" value="100" aria-label="grams" />
+          <span class="meta">g</span>
+          <button class="iconbtn" data-add="${i}" aria-label="add">＋</button>
+        </div>
+      </div>`).join("");
+  } catch (err) {
+    box.innerHTML = `<div class="empty">Couldn't reach the food database right now (it gets busy, or you're offline). Try again in a moment, or enter the food manually below.</div>`;
+  }
+}
+function escapeHtml(s) {
+  return s.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 }
 window.delFood = (i) => {
   const key = todayKey();
   state.food[key].splice(i, 1);
   save(); render();
 };
+
+/* ---------- natural-language meal parsing ----------
+ * Type "2 eggs + 2 slices bacon + 100g oats" and we estimate calories/protein.
+ * Known common foods come from a built-in table; anything else is looked up
+ * online (Open Food Facts) and flagged as an estimate. Every line is editable
+ * before it's logged.
+ */
+const WORD_NUM = { a: 1, an: 1, one: 1, two: 2, three: 3, four: 4, five: 5, six: 6, seven: 7, eight: 8, nine: 9, ten: 10, eleven: 11, twelve: 12, half: 0.5, "½": 0.5, "couple": 2, "few": 3 };
+const MASS_UNITS = { g: 1, gram: 1, grams: 1, gr: 1, kg: 1000, ml: 1, l: 1000, litre: 1000, liter: 1000 };
+const VOL_UNITS = { tbsp: 15, tablespoon: 15, tablespoons: 15, tsp: 5, teaspoon: 5, teaspoons: 5, cup: 150, cups: 150, scoop: 30, scoops: 30, handful: 30, can: 120, tin: 120, bowl: 200, glass: 240 };
+const PIECE_UNITS = ["slice", "slices", "piece", "pieces", "rasher", "rashers", "fillet", "fillets", "clove", "cloves", "stick", "sticks"];
+
+// per100 = kcal & protein per 100 g/ml · g = typical weight of "1" of this food
+const FOOD_DB = {
+  egg:           { per100: { kcal: 143, protein: 12.6 }, g: 50, aliases: ["eggs"] },
+  bacon:         { per100: { kcal: 410, protein: 30 }, g: 12, aliases: ["bacon rasher", "bacon rashers", "rasher", "rashers"] },
+  sausage:       { per100: { kcal: 300, protein: 13 }, g: 50, aliases: ["sausages"] },
+  potato:        { per100: { kcal: 87, protein: 2 }, g: 150, aliases: ["potatoes", "boiled potato"] },
+  "sweet potato":{ per100: { kcal: 90, protein: 1.6 }, g: 130, aliases: ["sweet potatoes"] },
+  fries:         { per100: { kcal: 312, protein: 3.4 }, g: 117, aliases: ["chips", "french fries"] },
+  rice:          { per100: { kcal: 130, protein: 2.7 }, g: 150, aliases: ["white rice", "cooked rice", "brown rice"] },
+  pasta:         { per100: { kcal: 158, protein: 5.8 }, g: 150, aliases: ["spaghetti", "cooked pasta", "macaroni"] },
+  bread:         { per100: { kcal: 265, protein: 9 }, g: 30, aliases: ["toast", "slice of bread", "white bread", "brown bread", "wholemeal bread"] },
+  oats:          { per100: { kcal: 379, protein: 13 }, g: 40, aliases: ["oatmeal", "porridge", "rolled oats"] },
+  milk:          { per100: { kcal: 50, protein: 3.4 }, g: 200, aliases: ["semi skimmed milk", "whole milk", "skimmed milk"] },
+  yogurt:        { per100: { kcal: 59, protein: 10 }, g: 170, aliases: ["greek yogurt", "yoghurt", "greek yoghurt"] },
+  cheese:        { per100: { kcal: 402, protein: 25 }, g: 30, aliases: ["cheddar", "cheddar cheese"] },
+  butter:        { per100: { kcal: 717, protein: 0.9 }, g: 10, aliases: [] },
+  "olive oil":   { per100: { kcal: 884, protein: 0 }, g: 14, aliases: ["oil"] },
+  "peanut butter":{ per100: { kcal: 588, protein: 25 }, g: 16, aliases: [] },
+  chicken:       { per100: { kcal: 165, protein: 31 }, g: 120, aliases: ["chicken breast", "chicken breasts", "grilled chicken"] },
+  beef:          { per100: { kcal: 250, protein: 26 }, g: 120, aliases: ["beef mince", "minced beef", "ground beef", "steak"] },
+  pork:          { per100: { kcal: 242, protein: 27 }, g: 120, aliases: ["pork chop"] },
+  tuna:          { per100: { kcal: 116, protein: 26 }, g: 100, aliases: ["canned tuna"] },
+  salmon:        { per100: { kcal: 208, protein: 22 }, g: 120, aliases: [] },
+  ham:           { per100: { kcal: 145, protein: 18 }, g: 23, aliases: [] },
+  banana:        { per100: { kcal: 89, protein: 1.1 }, g: 118, aliases: ["bananas"] },
+  apple:         { per100: { kcal: 52, protein: 0.3 }, g: 180, aliases: ["apples"] },
+  orange:        { per100: { kcal: 47, protein: 0.9 }, g: 130, aliases: ["oranges"] },
+  avocado:       { per100: { kcal: 160, protein: 2 }, g: 100, aliases: ["avocados"] },
+  tomato:        { per100: { kcal: 18, protein: 0.9 }, g: 120, aliases: ["tomatoes"] },
+  carrot:        { per100: { kcal: 41, protein: 0.9 }, g: 60, aliases: ["carrots"] },
+  broccoli:      { per100: { kcal: 34, protein: 2.8 }, g: 90, aliases: [] },
+  almonds:       { per100: { kcal: 579, protein: 21 }, g: 30, aliases: ["almond", "nuts"] },
+  "protein shake":{ per100: { kcal: 400, protein: 80 }, g: 30, aliases: ["whey", "protein powder", "whey protein"] },
+  honey:         { per100: { kcal: 304, protein: 0.3 }, g: 21, aliases: [] },
+  sugar:         { per100: { kcal: 387, protein: 0 }, g: 4, aliases: [] },
+  coffee:        { per100: { kcal: 2, protein: 0.1 }, g: 240, aliases: ["black coffee"] },
+};
+
+// build an alias -> key index once
+const FOOD_INDEX = (() => {
+  const idx = {};
+  for (const key in FOOD_DB) {
+    idx[key] = key;
+    (FOOD_DB[key].aliases || []).forEach((a) => (idx[a] = key));
+  }
+  return idx;
+})();
+
+function lookupFood(name) {
+  const n = name.trim().toLowerCase().replace(/\.$/, "");
+  if (FOOD_INDEX[n]) return FOOD_DB[FOOD_INDEX[n]];
+  if (n.endsWith("s") && FOOD_INDEX[n.slice(0, -1)]) return FOOD_DB[FOOD_INDEX[n.slice(0, -1)]];
+  if (FOOD_INDEX[n + "s"]) return FOOD_DB[FOOD_INDEX[n + "s"]];
+  return null;
+}
+
+function parseMeal(text) {
+  return text
+    .split(/\+|,|;|\band\b|\n|&/i)
+    .map((s) => s.trim())
+    .filter(Boolean)
+    .map((raw) => {
+      let rest = raw.toLowerCase().trim();
+      let qty = 1, unit = null;
+      const numMatch = rest.match(/^(\d+(?:[.,]\d+)?)\s*(.*)$/);
+      if (numMatch) {
+        qty = parseFloat(numMatch[1].replace(",", "."));
+        rest = numMatch[2];
+      } else {
+        const wordMatch = rest.match(/^([\wÀ-ÿ½]+)\s+(.*)$/);
+        if (wordMatch && WORD_NUM[wordMatch[1]] != null) {
+          qty = WORD_NUM[wordMatch[1]];
+          rest = wordMatch[2];
+        }
+      }
+      const unitMatch = rest.match(/^([a-zA-Z]+)\.?\s+(.*)$/);
+      if (unitMatch) {
+        const u = unitMatch[1].toLowerCase();
+        if (MASS_UNITS[u] || VOL_UNITS[u] || PIECE_UNITS.includes(u)) {
+          unit = u;
+          rest = unitMatch[2];
+        }
+      }
+      const name = rest.replace(/^of\s+/, "").trim();
+      return { raw, qty, unit, name };
+    })
+    .filter((it) => it.name);
+}
+
+function gramsFor(qty, unit, entry) {
+  if (unit && MASS_UNITS[unit]) return qty * MASS_UNITS[unit];
+  if (unit && VOL_UNITS[unit]) return qty * VOL_UNITS[unit];
+  return qty * (entry && entry.g ? entry.g : 100); // piece / count / unknown unit
+}
+
+function makeMealLine(item, grams, per100, estimate, unknown) {
+  return {
+    label: item.raw.charAt(0).toUpperCase() + item.raw.slice(1),
+    kcal: Math.round((per100.kcal * grams) / 100),
+    protein: Math.round((per100.protein * grams) / 100),
+    estimate: !!estimate,
+    unknown: !!unknown,
+  };
+}
+
+async function offLookup(name) {
+  const url = "https://world.openfoodfacts.org/cgi/search.pl?" + new URLSearchParams({
+    search_terms: name, search_simple: "1", action: "process", json: "1",
+    page_size: "5", fields: "product_name,nutriments",
+  });
+  try {
+    const res = await fetch(url);
+    if (!res.ok) return null;
+    const data = await res.json();
+    for (const p of data.products || []) {
+      const n = p.nutriments || {};
+      let kcal = n["energy-kcal_100g"];
+      if (kcal == null && n["energy_100g"] != null) kcal = n["energy_100g"] / 4.184;
+      if (kcal != null && !isNaN(kcal)) return { kcal: Math.round(kcal), protein: Math.round((n["proteins_100g"] || 0) * 10) / 10 };
+    }
+  } catch { /* offline / busy */ }
+  return null;
+}
+
+let mealPreview = [];
+async function calcMeal(text, box) {
+  const items = parseMeal(text);
+  if (!items.length) { box.innerHTML = ""; mealPreview = []; return; }
+  box.innerHTML = `<div class="empty">Working it out…</div>`;
+  mealPreview = await Promise.all(items.map(async (it) => {
+    const entry = lookupFood(it.name);
+    if (entry) return makeMealLine(it, gramsFor(it.qty, it.unit, entry), entry.per100, false, false);
+    const off = await offLookup(it.name);
+    if (off) return makeMealLine(it, gramsFor(it.qty, it.unit, { g: 100 }), off, true, false);
+    return { label: it.raw.charAt(0).toUpperCase() + it.raw.slice(1), kcal: 0, protein: 0, estimate: true, unknown: true };
+  }));
+  renderMealPreview(box);
+}
+
+function renderMealPreview(box) {
+  if (!mealPreview.length) { box.innerHTML = ""; return; }
+  const totKcal = mealPreview.reduce((s, l) => s + (+l.kcal || 0), 0);
+  const totProt = mealPreview.reduce((s, l) => s + (+l.protein || 0), 0);
+  box.innerHTML = `
+    <div class="meal-lines">
+      ${mealPreview.map((l, i) => `
+        <div class="meal-line" data-i="${i}">
+          <input class="ml-name" value="${escapeHtml(l.label)}" />
+          <div class="ml-macros">
+            <input class="ml-kcal" type="number" inputmode="numeric" value="${l.kcal}" /><span class="meta">kcal</span>
+            <input class="ml-prot" type="number" inputmode="numeric" value="${l.protein}" /><span class="meta">g</span>
+            <button class="del ml-del" aria-label="remove">✕</button>
+          </div>
+          ${l.estimate ? `<div class="ml-note meta">${l.unknown ? "⚠ not recognised — please fill in" : "≈ estimated from online data, tweak if needed"}</div>` : ""}
+        </div>`).join("")}
+    </div>
+    <div class="meal-total"><span>Total</span><span class="v">${totKcal} kcal · ${totProt} g protein</span></div>
+    <button class="btn success" id="meal-add-all">Add ${mealPreview.length} item${mealPreview.length > 1 ? "s" : ""} to today</button>`;
+}
 
 /* ---------------------- SETTINGS (More) ---------------------- */
 function viewSettings() {
@@ -610,7 +1070,14 @@ function viewSettings() {
     </div>
 
     <div class="card">
+      <div class="card-head"><h2>Training block</h2><span class="pill">week ${blockWeekIndex() + 1}/${PROGRAM.block.lengthWeeks}</span></div>
+      <p class="subtle" style="margin:0 0 10px"><b>${currentWeek().label}</b> · target ${currentWeek().rir} reps in reserve. Sets ramp up each week, then a deload week to recover — repeating on a ${PROGRAM.block.lengthWeeks}-week cycle. Started ${state.programStart}.</p>
+      <button class="btn secondary small" id="block-restart">Restart block from today</button>
+    </div>
+
+    <div class="card">
       <ul class="list">
+        <li><span>📒 Workout history</span><button class="btn small secondary" onclick="navigate('history')">View</button></li>
         <li><span>👤 Profile & goal</span><button class="btn small secondary" onclick="navigate('profile')">Edit</button></li>
         <li><span>🔔 Reminders</span><button class="btn small secondary" onclick="navigate('reminders')">${state.reminders.enabled ? "On" : "Set up"}</button></li>
       </ul>
@@ -631,6 +1098,12 @@ function viewSettings() {
   `;
 }
 function bindSettings() {
+  document.getElementById("block-restart").onclick = () => {
+    if (confirm("Restart the training block from today? Next workout becomes week 1.")) {
+      state.programStart = todayKey();
+      save(); toast("Block restarted"); render();
+    }
+  };
   document.getElementById("export-btn").onclick = () => {
     const blob = new Blob([JSON.stringify(state, null, 2)], { type: "application/json" });
     const url = URL.createObjectURL(blob);
