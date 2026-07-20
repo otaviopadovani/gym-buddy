@@ -4,6 +4,8 @@
  * ========================================================================= */
 
 const STORE_KEY = "gymBuddyData.v1";
+const TRAINING_RESET_VERSION = 1;
+const NEXT_PROGRAM_START = "2026-07-20";
 
 const DEFAULT_STATE = {
   profile: {
@@ -16,7 +18,8 @@ const DEFAULT_STATE = {
     proteinPerKg: 2.0, // upper end of evidence-based range (1.6–2.2) — justified in a deficit
     startWeight: 70,
   },
-  programStart: todayKey(), // when the current 5-week training block began
+  programStart: NEXT_PROGRAM_START,
+  trainingResetVersion: TRAINING_RESET_VERSION,
   weights: [],         // { date:'YYYY-MM-DD', kg:Number }
   weights_init: false,
   workoutWeights: {},  // exerciseId -> current kg
@@ -51,7 +54,19 @@ function load() {
     const raw = localStorage.getItem(STORE_KEY);
     if (!raw) return structuredClone(DEFAULT_STATE);
     const parsed = JSON.parse(raw);
-    return deepMerge(structuredClone(DEFAULT_STATE), parsed);
+    const loaded = deepMerge(structuredClone(DEFAULT_STATE), parsed);
+
+    // One-time reset requested for the Monday, July 20 restart. Preserve
+    // profile, weight, food, reminders, and presets; clear training only.
+    if (parsed.trainingResetVersion !== TRAINING_RESET_VERSION) {
+      loaded.programStart = NEXT_PROGRAM_START;
+      loaded.workoutLog = {};
+      loaded.workoutWeights = {};
+      loaded.trainingResetVersion = TRAINING_RESET_VERSION;
+      localStorage.setItem(STORE_KEY, JSON.stringify(loaded));
+    }
+
+    return loaded;
   } catch (e) {
     console.warn("load failed", e);
     return structuredClone(DEFAULT_STATE);

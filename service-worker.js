@@ -1,5 +1,5 @@
 /* Gym Buddy service worker — offline caching + notification clicks */
-const CACHE = "gym-buddy-v6";
+const CACHE = "gym-buddy-v7";
 const ASSETS = [
   "./",
   "./index.html",
