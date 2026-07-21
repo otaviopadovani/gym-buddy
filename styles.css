@@ -59,6 +59,31 @@ button { font-family: inherit; cursor: pointer; }
 }
 .brand-text { letter-spacing: .2px; }
 .topbar-right { display: flex; align-items: center; gap: 10px; }
+.refresh-btn {
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  border: 1px solid var(--line);
+  border-radius: 50%;
+  background: var(--bg-elev-2);
+  color: var(--text);
+  font-size: 20px;
+  line-height: 1;
+}
+.refresh-btn:active { transform: rotate(45deg); }
+.refresh-btn.updating { animation: spin .8s linear infinite; }
+.refresh-btn.update-ready {
+  width: auto;
+  padding: 0 10px;
+  border-radius: 999px;
+  border-color: var(--accent-2);
+  color: var(--accent-2);
+  font-size: 12px;
+  font-weight: 800;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
 .pill {
   font-size: 13px; font-weight: 700;
   background: var(--bg-elev-2);

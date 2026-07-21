@@ -83,6 +83,7 @@ Then open the printed URL (e.g. `http://localhost:8080`).
 
 - Because this is a static site with no server, **push notifications can't be sent from a server**. Reminders are scheduled on-device while the app (or its background worker) is alive, so keep it installed and open it daily. A test button is in the Reminders tab.
 - Data lives in this browser's `localStorage`. Clearing site data wipes it — use **Export** to back up.
+- The installed PWA checks for new deployments whenever it opens or returns to the foreground. Tap **↻** in the header to force an update check and refresh; it changes to **Update** when a new version is ready. Previously cached files remain available offline.
 
 ## Tech
 

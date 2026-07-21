@@ -1,5 +1,5 @@
 /* Gym Buddy service worker — offline caching + notification clicks */
-const CACHE = "gym-buddy-v8";
+const CACHE = "gym-buddy-v9";
 const ASSETS = [
   "./",
   "./index.html",
@@ -56,22 +56,53 @@ self.addEventListener("activate", (e) => {
   );
 });
 
-// cache-first for app assets, network fallback
+// Only handle this app's files. External APIs (for example Open Food Facts)
+// must return their own response/errors rather than an offline HTML fallback.
 self.addEventListener("fetch", (e) => {
   const req = e.request;
   if (req.method !== "GET") return;
-  e.respondWith(
-    caches.match(req).then((cached) => {
-      if (cached) return cached;
-      return fetch(req)
-        .then((res) => {
-          const copy = res.clone();
-          caches.open(CACHE).then((c) => c.put(req, copy)).catch(() => {});
-          return res;
-        })
-        .catch(() => caches.match("./index.html"));
-    })
-  );
+  const url = new URL(req.url);
+  if (url.origin !== self.location.origin) return;
+
+  // Navigations and code are network-first so an installed PWA can refresh to
+  // the newest GitHub Pages deployment. Exercise photos remain cache-first.
+  const isImage = req.destination === "image";
+  if (isImage) {
+    e.respondWith(cacheFirst(req));
+  } else {
+    e.respondWith(networkFirst(req, req.mode === "navigate"));
+  }
+});
+
+async function networkFirst(req, isNavigation) {
+  try {
+    const response = await fetch(req);
+    if (response.ok) {
+      const cache = await caches.open(CACHE);
+      cache.put(req, response.clone()).catch(() => {});
+    }
+    return response;
+  } catch {
+    const cached = await caches.match(req);
+    if (cached) return cached;
+    if (isNavigation) return caches.match("./index.html");
+    return Response.error();
+  }
+}
+
+async function cacheFirst(req) {
+  const cached = await caches.match(req);
+  if (cached) return cached;
+  const response = await fetch(req);
+  if (response.ok) {
+    const cache = await caches.open(CACHE);
+    cache.put(req, response.clone()).catch(() => {});
+  }
+  return response;
+}
+
+self.addEventListener("message", (e) => {
+  if (e.data && e.data.type === "SKIP_WAITING") self.skipWaiting();
 });
 
 // focus/open the app when a reminder is tapped

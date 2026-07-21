@@ -1314,6 +1314,9 @@ document.addEventListener("visibilitychange", () => { if (!document.hidden) sche
 
 /* ---------------------- PWA install ---------------------- */
 let deferredPrompt = null;
+let swRegistration = null;
+let refreshRequested = false;
+
 window.addEventListener("beforeinstallprompt", (e) => {
   e.preventDefault();
   deferredPrompt = e;
@@ -1327,10 +1330,77 @@ window.addEventListener("beforeinstallprompt", (e) => {
   };
 });
 
+function showUpdateReady() {
+  const btn = document.getElementById("refresh-btn");
+  if (!btn) return;
+  btn.textContent = "Update";
+  btn.classList.remove("updating");
+  btn.classList.add("update-ready");
+  btn.title = "An update is ready — tap to reload";
+  toast("App update ready — tap Update");
+}
+
+function watchServiceWorker(registration) {
+  if (registration.waiting) showUpdateReady();
+  registration.addEventListener("updatefound", () => {
+    const worker = registration.installing;
+    if (!worker) return;
+    worker.addEventListener("statechange", () => {
+      if (worker.state === "installed" && navigator.serviceWorker.controller) {
+        showUpdateReady();
+      }
+    });
+  });
+}
+
+async function refreshPwa() {
+  const btn = document.getElementById("refresh-btn");
+  if (btn) {
+    btn.textContent = "↻";
+    btn.classList.remove("update-ready");
+    btn.classList.add("updating");
+    btn.disabled = true;
+  }
+  refreshRequested = true;
+
+  try {
+    const registration = swRegistration || await navigator.serviceWorker.getRegistration();
+    if (registration) {
+      await registration.update();
+      if (registration.waiting) {
+        registration.waiting.postMessage({ type: "SKIP_WAITING" });
+        return; // controllerchange below reloads after activation
+      }
+      if (registration.installing) return; // controllerchange reloads when ready
+    }
+    window.location.reload();
+  } catch (e) {
+    console.warn("PWA refresh failed", e);
+    window.location.reload();
+  }
+}
+
+document.getElementById("refresh-btn").addEventListener("click", refreshPwa);
+
 /* ---------------------- boot ---------------------- */
 if ("serviceWorker" in navigator) {
+  navigator.serviceWorker.addEventListener("controllerchange", () => {
+    if (refreshRequested) window.location.reload();
+    else showUpdateReady();
+  });
+
   window.addEventListener("load", () => {
-    navigator.serviceWorker.register("service-worker.js").catch((e) => console.warn("SW reg failed", e));
+    navigator.serviceWorker.register("service-worker.js")
+      .then((registration) => {
+        swRegistration = registration;
+        watchServiceWorker(registration);
+        registration.update().catch(() => {});
+      })
+      .catch((e) => console.warn("SW reg failed", e));
+  });
+
+  document.addEventListener("visibilitychange", () => {
+    if (!document.hidden && swRegistration) swRegistration.update().catch(() => {});
   });
 }
 scheduleReminders();
