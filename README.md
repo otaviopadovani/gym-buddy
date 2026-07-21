@@ -87,3 +87,12 @@ Then open the printed URL (e.g. `http://localhost:8080`).
 ## Tech
 
 Vanilla JS, no dependencies. `sharp` is only used once to render the PNG icons from `icons/icon.svg` and is not needed to run or deploy the app.
+
+### Exercise media
+
+The start/finish photographs in `assets/exercises/` come from
+[yuhonas/free-exercise-db](https://github.com/yuhonas/free-exercise-db), an
+open public-domain exercise dataset released under
+[The Unlicense](https://github.com/yuhonas/free-exercise-db/blob/main/LICENSE).
+Form instructions in the app were adapted and shortened for this routine.
+The files are bundled locally so the guides continue to work offline.

@@ -370,6 +370,7 @@ function viewWorkouts() {
 
   session.exercises.forEach((ex) => {
     const w = weightFor(ex.id);
+    const guide = window.FORM_GUIDES && window.FORM_GUIDES[ex.id];
     const unit = ex.unit === "sec" ? "" : "kg";
     const setArr = log.sets[ex.id] || [];
     const progress = shouldProgress(ex);
@@ -419,6 +420,26 @@ function viewWorkouts() {
       html += `<div class="exercise-hint" style="color:var(--accent-2)">⬆ You maxed the reps last time — try ${ex.unit ? "more time/reps" : (w + (ex.inc || 1)) + " kg"} today.</div>`;
     }
     html += `<div class="exercise-hint">${ex.note}</div>`;
+    if (guide) {
+      const sourceUrl = `https://github.com/yuhonas/free-exercise-db/tree/main/exercises/${guide.sourceId}`;
+      html += `<details class="form-guide">
+        <summary>📷 How to perform</summary>
+        <div class="form-guide-body">
+          <div class="form-photos">
+            <figure>
+              <img src="assets/exercises/${ex.id}-0.jpg" alt="${ex.name} starting position" loading="lazy" />
+              <figcaption>Start</figcaption>
+            </figure>
+            <figure>
+              <img src="assets/exercises/${ex.id}-1.jpg" alt="${ex.name} finishing position" loading="lazy" />
+              <figcaption>Finish</figcaption>
+            </figure>
+          </div>
+          <ol>${guide.steps.map((step) => `<li>${step}</li>`).join("")}</ol>
+          <a class="form-source" href="${sourceUrl}" target="_blank" rel="noopener noreferrer">Photo source: Free Exercise DB ↗</a>
+        </div>
+      </details>`;
+    }
     html += `</div>`;
   });
 

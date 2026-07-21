@@ -182,6 +182,56 @@ input:focus, select:focus, textarea:focus { border-color: var(--accent); }
   width: 34px; height: 34px; border-radius: 9px; font-size: 18px; line-height: 1; display: grid; place-items: center;
 }
 
+/* Exercise form guides */
+.form-guide {
+  margin-top: 10px;
+  border-top: 1px solid var(--line);
+}
+.form-guide > summary {
+  list-style: none;
+  cursor: pointer;
+  color: var(--accent);
+  font-size: 13px;
+  font-weight: 700;
+  padding: 11px 0 1px;
+}
+.form-guide > summary::-webkit-details-marker { display: none; }
+.form-guide > summary::after { content: " ▾"; }
+.form-guide[open] > summary::after { content: " ▴"; }
+.form-guide-body { padding-top: 10px; }
+.form-photos {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+.form-photos figure {
+  margin: 0;
+  overflow: hidden;
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+}
+.form-photos img {
+  display: block;
+  width: 100%;
+  aspect-ratio: 3 / 2;
+  object-fit: cover;
+}
+.form-photos figcaption {
+  padding: 5px 8px;
+  color: var(--text-dim);
+  font-size: 11px;
+  text-align: center;
+}
+.form-guide ol {
+  margin: 12px 0;
+  padding-left: 22px;
+  color: var(--text-dim);
+  font-size: 13px;
+}
+.form-guide ol li { margin-bottom: 7px; }
+.form-source { font-size: 11px; color: var(--text-dim); }
+
 /* Suggestion banner */
 .banner {
   display: flex; gap: 10px; align-items: flex-start;

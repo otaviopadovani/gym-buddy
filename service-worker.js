@@ -1,5 +1,5 @@
 /* Gym Buddy service worker — offline caching + notification clicks */
-const CACHE = "gym-buddy-v7";
+const CACHE = "gym-buddy-v8";
 const ASSETS = [
   "./",
   "./index.html",
@@ -10,6 +10,36 @@ const ASSETS = [
   "./icons/icon.svg",
   "./icons/icon-192.png",
   "./icons/icon-512.png",
+  "./assets/exercises/incline_press-0.jpg",
+  "./assets/exercises/incline_press-1.jpg",
+  "./assets/exercises/one_arm_row-0.jpg",
+  "./assets/exercises/one_arm_row-1.jpg",
+  "./assets/exercises/shoulder_press-0.jpg",
+  "./assets/exercises/shoulder_press-1.jpg",
+  "./assets/exercises/lateral_raise-0.jpg",
+  "./assets/exercises/lateral_raise-1.jpg",
+  "./assets/exercises/goblet_squat-0.jpg",
+  "./assets/exercises/goblet_squat-1.jpg",
+  "./assets/exercises/biceps_curl-0.jpg",
+  "./assets/exercises/biceps_curl-1.jpg",
+  "./assets/exercises/calf_raise-0.jpg",
+  "./assets/exercises/calf_raise-1.jpg",
+  "./assets/exercises/plank-0.jpg",
+  "./assets/exercises/plank-1.jpg",
+  "./assets/exercises/floor_press-0.jpg",
+  "./assets/exercises/floor_press-1.jpg",
+  "./assets/exercises/renegade_row-0.jpg",
+  "./assets/exercises/renegade_row-1.jpg",
+  "./assets/exercises/rdl-0.jpg",
+  "./assets/exercises/rdl-1.jpg",
+  "./assets/exercises/reverse_lunge-0.jpg",
+  "./assets/exercises/reverse_lunge-1.jpg",
+  "./assets/exercises/rear_delt_fly-0.jpg",
+  "./assets/exercises/rear_delt_fly-1.jpg",
+  "./assets/exercises/triceps_ext-0.jpg",
+  "./assets/exercises/triceps_ext-1.jpg",
+  "./assets/exercises/russian_twist-0.jpg",
+  "./assets/exercises/russian_twist-1.jpg",
 ];
 
 self.addEventListener("install", (e) => {
