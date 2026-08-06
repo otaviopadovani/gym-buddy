@@ -182,6 +182,7 @@ function shouldProgress(ex) {
 /* ---------- UI plumbing ---------- */
 const view = document.getElementById("view");
 let route = location.hash.replace("#", "") || "today";
+let lastRenderedRoute = null;
 
 function navigate(r) {
   route = r;
@@ -223,6 +224,9 @@ function updateStreakPill() {
  * RENDER
  * ========================================================================= */
 function render() {
+  const previousScrollY = window.scrollY;
+  const previousRoute = lastRenderedRoute;
+
   switch (route) {
     case "workouts": view.innerHTML = viewWorkouts(); break;
     case "history":  view.innerHTML = viewHistory(); break;
@@ -235,7 +239,15 @@ function render() {
   }
   setActiveTab();
   updateStreakPill();
-  window.scrollTo(0, 0);
+  lastRenderedRoute = route;
+
+  if (route !== previousRoute) {
+    window.scrollTo(0, 0);
+  } else {
+    // Set/repetition and weight controls rebuild the current view. Restore the
+    // phone's exact position after the browser lays out the replacement DOM.
+    requestAnimationFrame(() => window.scrollTo(0, previousScrollY));
+  }
 }
 
 /* ---------------------- TODAY ---------------------- */
